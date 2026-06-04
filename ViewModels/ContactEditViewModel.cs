@@ -1,27 +1,33 @@
 ﻿using MVVM.Models;
 using MVVM.Services;
+using System;
+using System.Text.RegularExpressions;
 using System.Windows.Input;
+using Microsoft.EntityFrameworkCore;
 
 namespace MVVM.ViewModels
 {
     public class ContactEditViewModel : ObservableObject, INavigationAware
     {
         private readonly INavigationService _navigation;
-        private readonly PhoneBookDbKonuh2307b2Context _context;
         private readonly IDialogService _dialogService;
-        private Contact _contact = null!;
+        private readonly IDbContextFactory<PhoneBookDbKonuh2307b2Context> _contextFactory;  // Фaбрика
+
+        private int _contactId;
+        private string _editName = string.Empty;
+        private string _editPhone = string.Empty;
         private bool _isNewContact = false;
 
         public string EditName
         {
-            get => _contact.Name;
-            set { _contact.Name = value; OnPropertyChanged(); }
+            get => _editName;
+            set => Set(ref _editName, value);
         }
 
         public string EditPhone
         {
-            get => _contact.Phone;
-            set { _contact.Phone = value; OnPropertyChanged(); }
+            get => _editPhone;
+            set => Set(ref _editPhone, value);
         }
 
         public ICommand SaveCommand { get; }
@@ -29,33 +35,33 @@ namespace MVVM.ViewModels
 
         public ContactEditViewModel(
             INavigationService navigation,
-            PhoneBookDbKonuh2307b2Context context,
-            IDialogService dialogService)
+            IDialogService dialogService,
+            IDbContextFactory<PhoneBookDbKonuh2307b2Context> contextFactory)  // ← ФАБРИКА!
         {
             _navigation = navigation;
-            _context = context;
             _dialogService = dialogService;
-            SaveCommand = new RelayCommand(SaveContact);
+            _contextFactory = contextFactory;
+
+            SaveCommand = new RelayCommand(SaveContact, CanSaveContact);
             CancelCommand = new RelayCommand(() => _navigation.NavigateTo<ContactsListViewModel>());
         }
 
         public void OnNavigatedTo(object? parameter)
         {
-            if (parameter is Contact c)
+            if (parameter is Contact contact)
             {
-                _contact = new Contact
-                {
-                    Id = c.Id,
-                    Name = c.Name,
-                    Phone = c.Phone
-                };
+                _contactId = contact.Id;
+                _editName = contact.Name;
+                _editPhone = contact.Phone;
                 _isNewContact = false;
             }
             else
             {
-                _contact = new Contact { Name = "", Phone = "" };
+                _editName = string.Empty;
+                _editPhone = string.Empty;
                 _isNewContact = true;
             }
+
             OnPropertyChanged(nameof(EditName));
             OnPropertyChanged(nameof(EditPhone));
         }
@@ -64,40 +70,80 @@ namespace MVVM.ViewModels
         {
             try
             {
+                // Валидация
                 if (string.IsNullOrWhiteSpace(EditName))
                 {
                     _dialogService.ShowWarning("Введите имя контакта", "Ошибка");
                     return;
                 }
 
-                if (_isNewContact)
+                if (!IsPhoneValid(EditPhone))
                 {
-                    var newContact = new Contact
-                    {
-                        Name = EditName,
-                        Phone = EditPhone
-                    };
-                    _context.Contacts.Add(newContact);
-                }
-                else
-                {
-                    var existingContact = _context.Contacts.Find(_contact.Id);
-                    if (existingContact != null)
-                    {
-                        existingContact.Name = EditName;
-                        existingContact.Phone = EditPhone;
-                        _context.Entry(existingContact).State = Microsoft.EntityFrameworkCore.EntityState.Modified;
-                    }
+                    _dialogService.ShowWarning("Введите корректный номер телефона", "Ошибка");
+                    return;
                 }
 
-                _context.SaveChanges();
+                // ===== СОЗДАЁМ КОНТЕКСТ НА ВРЕМЯ ОПЕРАЦИИ =====
+                using (var dbContext = _contextFactory.CreateDbContext())
+                {
+                    if (_isNewContact)
+                    {
+                        // ===== CREATE =====
+                        var newContact = new Contact
+                        {
+                            Name = EditName,
+                            Phone = EditPhone
+                        };
+                        dbContext.Contacts.Add(newContact);
+                        dbContext.SaveChanges();
+                    }
+                    else
+                    {
+                        // ===== FETCH-MODIFY-SAVE =====
+                        // 1. FETCH: загружаем актуальную сущность из БД
+                        var contactToUpdate = dbContext.Contacts.Find(_contactId);
+
+                        if (contactToUpdate == null)
+                        {
+                            _dialogService.ShowError("Контакт не найден в базе данных!", "Ошибка");
+                            _navigation.NavigateTo<ContactsListViewModel>();
+                            return;
+                        }
+
+                        // 2. MODIFY: переносим изменения из UI
+                        contactToUpdate.Name = EditName;
+                        contactToUpdate.Phone = EditPhone;
+
+                        // 3. SAVE: Change Tracker сам определит изменения
+                        dbContext.SaveChanges();
+                    }
+                } // ← КОНТЕКСТ УНИЧТОЖАЕТСЯ, Change Tracker очищается
+
                 _dialogService.ShowInfo("Контакт сохранён!", "Успех");
                 _navigation.NavigateTo<ContactsListViewModel>();
             }
-            catch (System.Exception ex)
+            catch (Exception ex)
             {
                 _dialogService.ShowError($"Ошибка при сохранении: {ex.Message}", "Ошибка");
             }
+        }
+
+        private bool CanSaveContact()
+        {
+            return !string.IsNullOrWhiteSpace(EditName) && IsPhoneValid(EditPhone);
+        }
+
+        private void CancelEdit()
+        {
+            _navigation.NavigateTo<ContactsListViewModel>();
+        }
+
+        private bool IsPhoneValid(string phone)
+        {
+            if (string.IsNullOrWhiteSpace(phone))
+                return false;
+            string phonePattern = @"^(\+7\d{10}|\d{10})$";
+            return Regex.IsMatch(phone, phonePattern);
         }
     }
 }

@@ -13,7 +13,7 @@ namespace MVVM.ViewModels
     {
         private readonly IDialogService _dialogService;
         private readonly INavigationService _navigation;
-        private readonly PhoneBookDbKonuh2307b2Context _context;
+        private readonly IDbContextFactory<PhoneBookDbKonuh2307b2Context> _contextFactory;  // ← только одно поле
 
         public ObservableCollection<Contact> Contacts { get; set; }
 
@@ -45,17 +45,18 @@ namespace MVVM.ViewModels
         public ContactsListViewModel(
             IDialogService dialogService,
             INavigationService navigation,
-            PhoneBookDbKonuh2307b2Context context)
+            IDbContextFactory<PhoneBookDbKonuh2307b2Context> contextFactory)
         {
             _dialogService = dialogService ?? throw new ArgumentNullException(nameof(dialogService));
             _navigation = navigation ?? throw new ArgumentNullException(nameof(navigation));
-            _context = context ?? throw new ArgumentNullException(nameof(context));
+            _contextFactory = contextFactory ?? throw new ArgumentNullException(nameof(contextFactory));  // ← инициализация
 
             Contacts = new ObservableCollection<Contact>();
 
             AddCommand = new RelayCommand(AddContact, CanAddContact);
             DeleteCommand = new RelayCommand<Contact>(DeleteContact, CanDeleteContact);
             EditContactCommand = new RelayCommand(EditContact, () => SelectedContact != null);
+
             LoadContacts();
         }
 
@@ -63,11 +64,14 @@ namespace MVVM.ViewModels
         {
             try
             {
-                var contactsFromDb = _context.Contacts.ToList();
-                Contacts.Clear();
-                foreach (var contact in contactsFromDb)
+                using (var dbContext = _contextFactory.CreateDbContext())
                 {
-                    Contacts.Add(contact);
+                    var contactsFromDb = dbContext.Contacts.ToList();
+                    Contacts.Clear();
+                    foreach (var contact in contactsFromDb)
+                    {
+                        Contacts.Add(contact);
+                    }
                 }
             }
             catch (Exception ex)
@@ -80,24 +84,28 @@ namespace MVVM.ViewModels
         {
             try
             {
-                if (Contacts.Any(c => c.Phone == Phone))
+                using (var dbContext = _contextFactory.CreateDbContext())
                 {
-                    _dialogService.ShowWarning("Контакт с таким номером телефона уже существует!", "Дубликат");
-                    return;
-                }
+                    // Проверка на дубликат
+                    if (dbContext.Contacts.Any(c => c.Phone == Phone))
+                    {
+                        _dialogService.ShowWarning("Контакт с таким номером телефона уже существует!", "Дубликат");
+                        return;
+                    }
 
-                var newContact = new Contact
-                {
-                    Name = Name,
-                    Phone = Phone
-                };
-                _context.Contacts.Add(newContact);
-                _context.SaveChanges();
-                Contacts.Add(newContact);
+                    var newContact = new Contact
+                    {
+                        Name = Name,
+                        Phone = Phone
+                    };
+
+                    dbContext.Contacts.Add(newContact);
+                    dbContext.SaveChanges();
+                    Contacts.Add(newContact);
+                }
 
                 Name = string.Empty;
                 Phone = string.Empty;
-
                 _dialogService.ShowInfo("Контакт успешно добавлен!", "Успех");
             }
             catch (Exception ex)
@@ -123,8 +131,16 @@ namespace MVVM.ViewModels
 
             try
             {
-                _context.Contacts.Remove(contact);
-                _context.SaveChanges();
+                using (var dbContext = _contextFactory.CreateDbContext())
+                {
+                    var contactToDelete = dbContext.Contacts.Find(contact.Id);
+                    if (contactToDelete != null)
+                    {
+                        dbContext.Contacts.Remove(contactToDelete);
+                        dbContext.SaveChanges();
+                    }
+                }
+
                 Contacts.Remove(contact);
                 _dialogService.ShowInfo("Контакт успешно удалён!", "Успех");
             }

@@ -22,18 +22,28 @@ namespace MVVM
             services.AddTransient<AboutViewModel>();
             services.AddTransient<ContactEditViewModel>();
             services.AddSingleton<MainWindowViewModel>();
-            services.AddDbContext<PhoneBookDbKonuh2307b2Context>(options =>
+            //изменяем на фабрику
+            services.AddDbContextFactory<PhoneBookDbKonuh2307b2Context>(options =>
                 options.UseSqlServer("Data Source=DESKTOP-JOHDNJH;Initial Catalog=PhoneBookDB_Konuh_2307B2;Integrated Security=True;TrustServerCertificate=True"));
+          
+            services.AddSingleton<MainWindow>(provider =>
+            {
+                var window = new MainWindow();
+                window.DataContext = provider.GetRequiredService<MainWindowViewModel>();
+                return window;
+            });
 
+            // Построение провайдера
             _serviceProvider = services.BuildServiceProvider();
-            var navigationService = _serviceProvider.GetRequiredService<INavigationService>();
-            navigationService.NavigateTo<ContactsListViewModel>();
-            var mainWindow = new MainWindow();
-            mainWindow.DataContext = _serviceProvider.GetRequiredService<MainWindowViewModel>();
+
+            // Получение и отображение главного окна
+            var mainWindow = _serviceProvider.GetRequiredService<MainWindow>();
             mainWindow.Show();
         }
 
-        protected override void OnExit(ExitEventArgs e)
+    
+
+    protected override void OnExit(ExitEventArgs e)
         {
             _serviceProvider?.Dispose();
             base.OnExit(e);
